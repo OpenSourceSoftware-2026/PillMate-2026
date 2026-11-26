@@ -57,9 +57,48 @@ pipeline {
             when {
                 branch 'main'
             }
+            environment {
+                GKE_PROJECT  = 'pillmate-project'
+                GKE_CLUSTER  = 'pillmate-cluster'
+                GKE_LOCATION = 'asia-northeast3-a'
+                K8S_NS       = 'pillmate-team'
+                KUBECONFIG   = "${WORKSPACE}/.kube/config"
+            }
             steps {
-                // GKE 배포는 5번 작업 완료 후 추가 예정
-                echo "deploy target image: ${IMAGE_NAME}:${IMAGE_TAG}"
+                withCredentials([usernamePassword(
+                    credentialsId: 'dockerhub-credentials',
+                    usernameVariable: 'DOCKERHUB_USER',
+                    passwordVariable: 'DOCKERHUB_TOKEN'
+                )]) {
+                    sh '''
+                        set -e
+                        gcloud container clusters get-credentials "$GKE_CLUSTER" \
+                            --location "$GKE_LOCATION" --project "$GKE_PROJECT"
+
+                        kubectl apply -f k8s/namespace.yaml
+
+                        set +x
+                        kubectl -n "$K8S_NS" create secret docker-registry dockerhub-pull-secret \
+                            --docker-server=https://index.docker.io/v1/ \
+                            --docker-username="$DOCKERHUB_USER" \
+                            --docker-password="$DOCKERHUB_TOKEN" \
+                            --dry-run=client -o yaml | kubectl apply -f -
+                        set -x
+
+                        kubectl apply -f k8s/service.yaml
+                        sed "s|IMAGE_TAG|${IMAGE_TAG}|g" k8s/deployment.yaml | kubectl apply -f -
+                        kubectl -n "$K8S_NS" annotate deployment/pillmate \
+                            kubernetes.io/change-cause="build #${BUILD_NUMBER} ${IMAGE_NAME}:${IMAGE_TAG}" --overwrite
+
+                        kubectl -n "$K8S_NS" rollout status deployment/pillmate --timeout=300s
+                        kubectl -n "$K8S_NS" get pods,svc -o wide
+                    '''
+                }
+            }
+            post {
+                failure {
+                    sh 'KUBECONFIG="$WORKSPACE/.kube/config" kubectl -n pillmate-team rollout undo deployment/pillmate || true'
+                }
             }
         }
     }

@@ -1,0 +1,68 @@
+# PillMate 앱 Deployment (Express + EJS 통합 이미지 1개)
+# image 태그 자리(:IMAGE_TAG)는 Jenkins Deploy 단계에서 git commit SHA로 치환됨 (sed)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pillmate
+  namespace: pillmate-team
+  labels:
+    app: pillmate
+spec:
+  # replicas 1인 이유:
+  #  1) express-session 이 MemoryStore라 파드가 2개면 로그인 세션이 파드마다 따로 놂
+  #  2) node-cron 알림 스케줄러가 파드 수만큼 중복 실행됨
+  replicas: 1
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app: pillmate
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1        # 새 파드를 먼저 1개 더 띄우고
+      maxUnavailable: 0  # 새 파드가 Ready 되기 전엔 기존 파드를 안 죽임 → 무중단
+  template:
+    metadata:
+      labels:
+        app: pillmate
+    spec:
+      imagePullSecrets:
+        - name: dockerhub-pull-secret   # Docker Hub 저장소가 Private이라 필요
+      containers:
+        - name: pillmate
+          image: triplemone/pillmate-team:IMAGE_TAG
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 3000
+          env:
+            - name: PORT
+              value: "3000"
+            - name: TZ
+              value: Asia/Seoul
+          envFrom:
+            # DB_HOST/DB_USER/DB_PASSWORD/DB_NAME/DB_PORT,
+            # GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET, API 키들 → git에 안 올리고 kubectl로 직접 생성
+            - secretRef:
+                name: pillmate-app-secret
+          resources:
+            # 노드 1대(e2-medium)를 다른 수업 프로젝트와 같이 써서 CPU 여유가 적음 → 요청량 최소화
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+          # /auth/login 은 DB 조회 없이 로그인 페이지만 렌더링 → 앱 자체 상태 확인용으로 적합
+          readinessProbe:
+            httpGet:
+              path: /auth/login
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /auth/login
+              port: 3000
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 3
