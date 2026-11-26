@@ -1,0 +1,16 @@
+# 외부 접속용 Service — GKE가 외부 IP(로드밸런서)를 자동 할당
+apiVersion: v1
+kind: Service
+metadata:
+  name: pillmate
+  namespace: pillmate-team
+  labels:
+    app: pillmate
+spec:
+  type: LoadBalancer
+  selector:
+    app: pillmate
+  ports:
+    - name: http
+      port: 80          # 브라우저에서 http://<EXTERNAL-IP> 로 접속
+      targetPort: 3000  # 컨테이너 포트
